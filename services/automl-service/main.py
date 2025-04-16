@@ -205,9 +205,9 @@ try:
             logger.info(f"Training dataset size: {h2o_frame.nrows} rows, {h2o_frame.ncols} columns")
             
             aml = H2OAutoML(
-                max_runtime_secs=600,  # 10 minutes
+                max_runtime_secs=120,  # 10 minutes
                 seed=1,
-                max_models=30,  # Reduced to 30 to better adhere to the 10-minute limit
+                max_models=10,  # Reduced to 30 to better adhere to the 10-minute limit
                 keep_cross_validation_predictions=True,
                 verbosity="info",
                 stopping_rounds=3,  # Enable early stopping with more aggressive settings
