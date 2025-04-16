@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# Environment files
+.env
+
+# IDEs and Editors
+.vscode/
+.idea/
+
+# AI SCADA Specific
+config/mosquitto/passwd
+acl.new
+
+# Logs
+*.log
+logs/
+
+# Docker (if local volumes are used)
+# mqtt-data/
+# mqtt-log/
+# timescale-data/
+# memgraph-data/
+# pgadmin_data/
+# fuxa_appdata/
+# fuxa_db/
+# fuxa_logs/
+# fuxa_images/

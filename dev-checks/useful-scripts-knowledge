@@ -1,0 +1,23 @@
+# 1. Drop the original primary key (assuming it exists and is just on 'id')
+docker compose exec -e PGPASSWORD=scadapassword tsdb psql -U scada -d scada_timeseries -c "ALTER TABLE sensor_data DROP CONSTRAINT sensor_data_pkey;"
+
+# 2. Add the composite primary key including the timestamp column
+docker compose exec -e PGPASSWORD=scadapassword tsdb psql -U scada -d scada_timeseries -c "ALTER TABLE sensor_data ADD PRIMARY KEY (timestamp, id);"
+
+# 3. Convert the table to a hypertable, migrating any existing data
+docker compose exec -e PGPASSWORD=scadapassword tsdb psql -U scada -d scada_timeseries -c "SELECT create_hypertable('sensor_data', 'timestamp', migrate_data => true);"
+Important Considerations:
+
+Run these from your ai-scada directory, where your docker-compose.yml file is located.
+Run them in order.
+Error Handling: If a command fails (e.g., the primary key sensor_data_pkey doesn't exist when you try to drop it), you might need to adjust. This sequence assumes you are starting from the state where SQLAlchemy created the table with the id column as the primary key.
+Idempotency: These commands are not fully idempotent. Running them a second time after they've already succeeded will cause errors (e.g., trying to drop a constraint that's already gone, trying to add a PK that already exists, trying to convert an existing hypertable).
+Automation: As mentioned, automating this with migrations (Alembic) or an initialization script is highly recommended for reliability, especially in development or production environments.
+
+sudo docker compose logs automl-service --since 5m | grep -i 'automl' | grep -i 'complete' || grep -i 'training'
+
+# CHECK TRAINING logs
+sudo docker compose logs automl-service --since 5m | grep -i 'automl' | grep -i 'complete' || grep -i 'training'
+
+sudo docker compose exec timescaledb psql -U postgres -d scada_db -c 'SELECT COUNT(*) FROM sensor_data;'
+# get size of entire tsdb

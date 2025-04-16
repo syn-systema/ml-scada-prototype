@@ -1,0 +1,6 @@
+h2o==3.40.0.4
+psycopg2-binary # May still be needed if H2O needs direct DB access later, keep for now
+pandas==1.5.3 # For handling data from API
+requests==2.28.1 # For calling the data-api-service
+paho-mqtt
+numpy==1.23.5 # Pin NumPy version for compatibility

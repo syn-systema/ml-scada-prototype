@@ -1,0 +1,185 @@
+# docker-compose.yml - AI SCADA System Core Infrastructure
+
+#version: '3.8'  # Specify docker-compose version
+
+# Define persistent storage volumes
+volumes:
+  mqtt-data: # Named volume for MQTT data
+  mqtt-log: # Named volume for MQTT logs
+  timescale-data: # Named volume for TimescaleDB data
+  pgadmin_data: # Optional volume for pgAdmin user data/settings
+  fuxa_appdata: # Fuxa application data (projects)
+  fuxa_db: # Fuxa database (tags history)
+  fuxa_logs: # Fuxa logs
+  fuxa_images: # Fuxa images (resources)
+
+# Define the network for services to communicate
+networks:
+  ai-scada-network:
+    name: ai-scada-network
+    driver: bridge # Default bridge network
+
+# Define the services (containers)
+services:
+  # MQTT Broker
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0.15 # Use specific version tag is good practice
+    container_name: mqtt-broker
+    ports:
+      - "1883:1883"  # MQTT default port
+      - "9001:9001"  # WebSockets port
+    volumes:
+      - ./config/mosquitto:/mosquitto/config
+      - mqtt-data:/mosquitto/data
+      - mqtt-log:/mosquitto/log
+    restart: unless-stopped
+    networks:
+      - ai-scada-network
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-u", "hmi-client", "-P", "hmi-client-password", "-W", "3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+  # Time-Series Database (TimescaleDB on PostgreSQL)
+  tsdb:
+    image: timescale/timescaledb:latest-pg14 # Choose PG version if needed
+    container_name: timescaledb
+    environment:
+      POSTGRES_USER: scada
+      POSTGRES_PASSWORD: scadapassword  # Use secrets management in production
+      POSTGRES_DB: scada_timeseries
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - ai-scada-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scada -d scada_timeseries"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    command: postgres -c shared_preload_libraries=timescaledb
+
+  # Data API Service
+  data-api-service:
+    build:
+      context: ./services/data-api-service
+    container_name: data-api-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"  # API port
+    environment:
+      MQTT_BROKER: mqtt-broker
+      MQTT_PORT: 1883
+      MQTT_USERNAME: api-service
+      MQTT_PASSWORD: api-service-password
+      TIMESCALE_HOST: tsdb
+      TIMESCALE_PORT: 5432
+      TIMESCALE_USER: scada
+      TIMESCALE_PASSWORD: scadapassword
+      TIMESCALE_DB: scada_timeseries
+    depends_on:
+      - mqtt-broker
+      - tsdb
+    networks:
+      - ai-scada-network
+
+  # Pipeline Simulator
+  pipeline-simulator:
+    build:
+      context: ./services/pipeline-simulator
+    container_name: pipeline-simulator
+    restart: unless-stopped
+    environment:
+      MQTT_BROKER: mqtt-broker
+      MQTT_PORT: 1883
+      MQTT_USERNAME: simulator
+      MQTT_PASSWORD: simulator-password
+      SIMULATION_INTERVAL: 5  # Generate data every 5 seconds
+    depends_on:
+      - mqtt-broker
+    networks:
+      - ai-scada-network
+
+  # AutoML Service
+  automl-service:
+    build:
+      context: ./services/automl-service
+    container_name: automl-service
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scada
+      POSTGRES_PASSWORD: scadapassword
+      POSTGRES_DB: scada_timeseries
+      TIMESCALEDB_HOST: tsdb
+      TIMESCALEDB_PORT: 5432
+      DATA_API_BASE_URL: http://data-api-service:8000
+      DATA_FETCH_LIMIT: 5000
+      MQTT_BROKER_HOST: mqtt-broker
+      MQTT_BROKER_PORT: 1883
+      MQTT_USERNAME: automl-service
+      MQTT_PASSWORD: automl-service-password
+      H2O_MODEL_ID: ${H2O_MODEL_ID:-}
+    depends_on:
+      - tsdb # Depends on the database for training data
+      - data-api-service # Or depends on the API service to fetch data
+    ports:
+      - "54321:54321" # Expose H2O Flow UI
+    networks:
+      - ai-scada-network
+
+  # pgAdmin (PostgreSQL/TimescaleDB UI)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      # NOTE: Set login details for accessing the pgAdmin web UI itself
+      # Replace with your desired email/password for pgAdmin login
+      PGADMIN_DEFAULT_EMAIL: admin@example.com 
+      PGADMIN_DEFAULT_PASSWORD: scadaadminpassword  # Use secrets management in production
+    ports:
+      - "5050:80" # Expose pgAdmin web interface on host port 5050
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin # Persist pgAdmin settings/server configs
+    depends_on:
+      - tsdb # Start after tsdb service starts
+    networks:
+      - ai-scada-network
+
+  # SCADA HMI (Fuxa)
+  fuxa:
+    image: frangoteam/fuxa:latest
+    container_name: fuxa-hmi
+    restart: unless-stopped
+    ports:
+      - "1881:1881" # Expose Fuxa web interface
+    volumes:
+      - fuxa_appdata:/usr/src/app/FUXA/server/_appdata # Persist project data
+      - fuxa_db:/usr/src/app/FUXA/server/_db # Persist tag history
+      - fuxa_logs:/usr/src/app/FUXA/server/_logs # Persist logs
+      - fuxa_images:/usr/src/app/FUXA/server/_images # Persist images
+    environment:
+      CHECK_PROJECT_DIR: true
+    depends_on:
+      - mqtt-broker
+    networks:
+      - ai-scada-network
+
+  # Nginx Reverse Proxy for FUXA HMI
+  nginx-fuxa:
+    image: nginx:latest
+    container_name: nginx-fuxa
+    restart: unless-stopped
+    ports:
+      - "80:80" # Expose Nginx on standard HTTP port
+    volumes:
+      - ./config/nginx/fuxa.conf:/etc/nginx/conf.d/default.conf # Nginx config for FUXA
+      - ./config/nginx/.htpasswd:/etc/nginx/.htpasswd # Mount the password file for authentication
+    depends_on:
+      - fuxa
+    networks:
+      - ai-scada-network

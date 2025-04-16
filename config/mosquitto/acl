@@ -1,0 +1,49 @@
+# AI-SCADA MQTT Access Control List
+
+# Default for unauthenticated clients (deny all)
+topic read $SYS/#
+topic deny #
+
+# Admin user has full access
+user scada-admin
+topic readwrite #
+
+# Pipeline Simulator - can publish to sensor data topics
+user simulator
+topic write ai_scada/data/#
+topic read $SYS/#
+
+# Data API Service - can subscribe to sensor data topics and publish to alarms
+user api-service
+topic read ai_scada/data/#
+topic write ai_scada/alarms/#
+topic read $SYS/#
+
+# GNN Prediction Service - can read sensor data and publish predictions
+user gnn-service
+topic read ai_scada/data/#
+topic write ai_scada/predictions/#
+topic read $SYS/#
+
+# Agent Service - can read relevant data and publish recommendations
+user agent-service
+topic read ai_scada/data/#
+topic read ai_scada/predictions/#
+topic read ai_scada/alarms/#
+topic write ai_scada/recommendations/#
+topic read $SYS/#
+
+# HMI Client (Fuxa/Dashboard) - can read most data and write control commands
+user hmi-client
+topic read ai_scada/data/#
+topic read ai_scada/predictions/#
+topic read ai_scada/alarms/#
+topic read ai_scada/recommendations/#
+topic write ai_scada/control/#
+topic read $SYS/#
+
+# AutoML Service - can read sensor data (add publish topic if needed)
+user automl-service
+topic read ai_scada/data/#
+topic write ai_scada/predictions/#
+topic read $SYS/#
