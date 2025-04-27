@@ -1,23 +1,212 @@
-# 1. Drop the original primary key (assuming it exists and is just on 'id')
-docker compose exec -e PGPASSWORD=scadapassword tsdb psql -U scada -d scada_timeseries -c "ALTER TABLE sensor_data DROP CONSTRAINT sensor_data_pkey;"
+# Useful Scripts for AI SCADA System Monitoring and Troubleshooting
 
-# 2. Add the composite primary key including the timestamp column
-docker compose exec -e PGPASSWORD=scadapassword tsdb psql -U scada -d scada_timeseries -c "ALTER TABLE sensor_data ADD PRIMARY KEY (timestamp, id);"
+This document provides a collection of terminal commands and scripts to help you monitor, check logs, and troubleshoot various components of the AI SCADA system. These commands are designed for use in a Linux environment with Docker Compose.
 
-# 3. Convert the table to a hypertable, migrating any existing data
-docker compose exec -e PGPASSWORD=scadapassword tsdb psql -U scada -d scada_timeseries -c "SELECT create_hypertable('sensor_data', 'timestamp', migrate_data => true);"
-Important Considerations:
+## Table of Contents
+- [General Docker Compose Commands](#general-docker-compose-commands)
+- [AutoML Service Checks](#automl-service-checks)
+- [TimescaleDB Checks](#timescaledb-checks)
+- [MQTT Broker Checks](#mqtt-broker-checks)
+- [FUXA HMI Checks](#fuxa-hmi-checks)
+- [NGINX Reverse Proxy Checks](#nginx-reverse-proxy-checks)
+- [Data Generator Checks](#data-generator-checks)
+- [System-Wide Troubleshooting](#system-wide-troubleshooting)
 
-Run these from your ai-scada directory, where your docker-compose.yml file is located.
-Run them in order.
-Error Handling: If a command fails (e.g., the primary key sensor_data_pkey doesn't exist when you try to drop it), you might need to adjust. This sequence assumes you are starting from the state where SQLAlchemy created the table with the id column as the primary key.
-Idempotency: These commands are not fully idempotent. Running them a second time after they've already succeeded will cause errors (e.g., trying to drop a constraint that's already gone, trying to add a PK that already exists, trying to convert an existing hypertable).
-Automation: As mentioned, automating this with migrations (Alembic) or an initialization script is highly recommended for reliability, especially in development or production environments.
+## General Docker Compose Commands
 
-sudo docker compose logs automl-service --since 5m | grep -i 'automl' | grep -i 'complete' || grep -i 'training'
+These commands help you get an overview of the running services and their status.
 
-# CHECK TRAINING logs
-sudo docker compose logs automl-service --since 5m | grep -i 'automl' | grep -i 'complete' || grep -i 'training'
+```bash
+# List all running containers and their status
+sudo docker compose ps
 
+# View logs for all services (last 50 lines, follow for real-time updates)
+sudo docker compose logs --tail 50 --follow
+
+# Stop all services
+sudo docker compose down
+
+# Start all services (or restart if already running)
+sudo docker compose up -d
+
+# Rebuild and restart all services to apply changes
+sudo docker compose build && sudo docker compose up -d
+```
+
+## AutoML Service Checks
+
+Commands to monitor and troubleshoot the AutoML service, focusing on training duration and prediction intervals.
+
+```bash
+# Rebuild and restart AutoML service to apply code changes
+sudo docker compose build automl-service && sudo docker compose up -d automl-service
+
+# View AutoML service logs (last 50 lines, follow for real-time updates)
+sudo docker compose logs automl-service --tail 50 --follow
+
+# Check for training duration in logs (last 5 minutes)
+sudo docker compose logs automl-service --since 5m | grep -i 'training'
+
+# Check for AutoML completion messages
+sudo docker compose logs automl-service --since 5m | grep -i 'automl' | grep -i 'complete'
+
+# Check prediction cycle timing to confirm interval (e.g., 1s or 30s)
+sudo docker compose logs automl-service --since 5m | grep -i 'prediction cycle'
+
+# Look for errors in AutoML service logs
+sudo docker compose logs automl-service --since 5m | grep -i 'error'
+
+# Inspect AutoML container details (e.g., environment variables, mounts)
+sudo docker inspect automl-service
+```
+
+## TimescaleDB Checks
+
+Commands to verify the database is running, check data, and troubleshoot connection issues.
+
+```bash
+# Check if TimescaleDB container is running
+sudo docker compose ps timescaledb
+
+# View TimescaleDB logs (useful for startup or connection errors)
+sudo docker compose logs timescaledb --tail 50 --follow
+
+# Connect to TimescaleDB using psql to check database status
 sudo docker compose exec timescaledb psql -U postgres -d scada_db -c 'SELECT COUNT(*) FROM sensor_data;'
-# get size of entire tsdb
+
+# Check size of the entire TimescaleDB database
+sudo docker compose exec timescaledb psql -U postgres -d scada_db -c "SELECT pg_size_pretty(pg_database_size('scada_db'));"
+
+# List all tables in the database to verify schema
+sudo docker compose exec timescaledb psql -U postgres -d scada_db -c '\dt'
+
+# Check if sensor_data is a hypertable (TimescaleDB specific)
+sudo docker compose exec timescaledb psql -U postgres -d scada_db -c "SELECT * FROM timescaledb_information.hypertables WHERE hypertable_name = 'sensor_data';"
+
+# Look for errors in TimescaleDB logs
+sudo docker compose logs timescaledb --since 5m | grep -i 'error'
+```
+
+## MQTT Broker Checks
+
+Commands to ensure the MQTT broker (e.g., Mosquitto) is operational and to monitor message traffic.
+
+```bash
+# Check if MQTT broker container is running
+sudo docker compose ps mqtt-broker
+
+# View MQTT broker logs (useful for connection or authentication issues)
+sudo docker compose logs mqtt-broker --tail 50 --follow
+
+# Subscribe to all topics to monitor incoming messages (requires mosquitto-clients)
+sudo docker compose exec mqtt-broker mosquitto_sub -h localhost -p 1883 -u scada -P scadapassword -t '#'
+
+# Publish a test message to verify broker functionality (requires mosquitto-clients)
+sudo docker compose exec mqtt-broker mosquitto_pub -h localhost -p 1883 -u scada -P scadapassword -t 'test/topic' -m 'Test message'
+
+# Check for errors in MQTT broker logs
+sudo docker compose logs mqtt-broker --since 5m | grep -i 'error'
+
+# Check MQTT broker configuration file (if accessible in container)
+sudo docker compose exec mqtt-broker cat /mosquitto/config/mosquitto.conf
+```
+
+## FUXA HMI Checks
+
+Commands to verify the FUXA HMI interface is running and accessible.
+
+```bash
+# Check if FUXA HMI container is running
+sudo docker compose ps fuxa-hmi
+
+# View FUXA HMI logs (useful for startup errors or connection issues to MQTT)
+sudo docker compose logs fuxa-hmi --tail 50 --follow
+
+# Check if FUXA is accessible via curl (through NGINX proxy, assuming port 80)
+curl -v http://localhost/fuxa
+
+# Look for errors in FUXA HMI logs
+sudo docker compose logs fuxa-hmi --since 5m | grep -i 'error'
+```
+
+## NGINX Reverse Proxy Checks
+
+Commands to ensure the NGINX reverse proxy is operational and correctly routing traffic to FUXA HMI.
+
+```bash
+# Check if NGINX container is running
+sudo docker compose ps nginx-proxy
+
+# View NGINX logs (useful for proxy or authentication issues)
+sudo docker compose logs nginx-proxy --tail 50 --follow
+
+# Check NGINX configuration file (if accessible in container)
+sudo docker compose exec nginx-proxy cat /etc/nginx/conf.d/fuxa.conf
+
+# Test NGINX configuration for syntax errors
+sudo docker compose exec nginx-proxy nginx -t
+
+# Check if NGINX is responding on port 80
+curl -v http://localhost
+
+# Look for errors in NGINX logs (e.g., 403, 404, 502 errors)
+sudo docker compose logs nginx-proxy --since 5m | grep -i 'error'
+```
+
+## Data Generator Checks
+
+Commands to monitor the data generator service that simulates sensor data for the SCADA system.
+
+```bash
+# Check if data-generator container is running
+sudo docker compose ps data-generator
+
+# View data-generator logs to confirm sensor data is being published
+sudo docker compose logs data-generator --tail 50 --follow
+
+# Check for errors in data-generator logs
+sudo docker compose logs data-generator --since 5m | grep -i 'error'
+
+# Verify data-generator is publishing to MQTT (look for publish messages)
+sudo docker compose logs data-generator --since 5m | grep -i 'publish'
+```
+
+## System-Wide Troubleshooting
+
+These commands help diagnose issues that might span multiple components or relate to system resources.
+
+```bash
+# Check Docker Compose version (ensure compatibility)
+docker compose version
+
+# Check system resource usage (CPU, memory) by Docker containers
+sudo docker stats --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'
+
+# Check for stopped or crashed containers
+sudo docker compose ps -a | grep -v 'Up'
+
+# Check Docker network configuration for potential connectivity issues
+sudo docker network ls
+sudo docker network inspect agentic-scada-master_default
+
+# Check for port conflicts or ensure ports are open (e.g., 80 for NGINX, 1883 for MQTT)
+sudo netstat -tuln | grep -E '80|1883|5432'
+
+# Restart all services in case of systemic issues
+sudo docker compose down && sudo docker compose up -d
+
+# Remove all stopped containers, unused images, and volumes (cleanup)
+sudo docker system prune -a --volumes
+```
+
+## Notes
+- **Timing Filters**: Many log commands use `--since 5m` to limit output to the last 5 minutes. Adjust this (e.g., `--since 1h` for 1 hour) if you need to see older logs.
+- **Permissions**: Commands assume `sudo` is required for Docker Compose operations. If your user is in the `docker` group, you may omit `sudo`.
+- **Customization**: If service names in `docker-compose.yml` differ (e.g., `timescaledb` vs `tsdb`), adjust commands accordingly.
+- **Safety**: Be cautious with commands like `docker system prune` as they can delete important data or configurations.
+
+These scripts cover all major components of the AI SCADA system, providing a robust toolkit for monitoring and troubleshooting. Save frequently used commands as shell scripts for quick access (e.g., `check_automl.sh`). If you encounter persistent issues, consider capturing logs to files for detailed analysis or sharing with your team:
+
+```bash
+# Save AutoML logs to a file for analysis
+sudo docker compose logs automl-service --since 10m > automl_logs_$(date +%F_%H-%M-%S).log
